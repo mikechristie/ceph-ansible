@@ -1,0 +1,164 @@
+- name: prepare for use of osd_scenario=lvm. Create partitions & logvols
+  hosts:
+  - osds
+
+  tasks:
+  - name: Include vars of partition_vars.yaml
+    include_vars:
+      file: partition_vars.yaml
+
+  - name: calculate partition and LV sizes
+    local_action: "shell python calcPartitions.py {{nvmedev_size}} {{numJOURNALs}} {{nvme_FSjournal_size}}"
+    register: part_sizes
+
+  # need to check if lvm2 is installed
+  - name: install lvm2
+    package:
+      name: lvm2
+      state: present
+
+  - name: define nvme_BI_size
+    set_fact:
+      nvme_BI_size={{part_sizes.stdout_lines[0]}}
+
+  - name: identify partitions to use for nvme devices (NVMEdev1)
+    shell: "for n in `seq 1 {{numNVMeParts}}` ; do echo {{nvmedev1}}$n ; done"
+    register: nvmedev1_parts
+
+  - name: check that lists are the same length (NVMEdev1)
+    shell: "echo {{nvmedev1_parts.stdout_lines}} {{datadev1_hdds}}"
+    failed_when: "{{nvmedev1_parts.stdout_lines|length}} != {{numNVMeParts}}"
+
+# START PARTITIONING
+  - name: make nvme device partition table
+    parted:
+      device: "{{item}}"
+      number: 1
+      label: gpt
+      state: present
+      align: optimal
+      part_start: 1MB
+      part_end: "{{ (nvme_BI_size | int) + 1 }}MB"
+      unit: MB
+    with_items:
+      - "{{nvmedev1}}"
+
+  - name: create Ceph journal partitions on NVME devices
+    script: "makePartitions.sh {{item}} {{numJOURNALs}} {{nvme_BI_size}} {{nvme_FSjournal_size}}"
+    with_items:
+      - "{{nvmedev1}}"
+
+  - name: create Ceph data partitions on HDDs 
+    parted:
+      device: "{{ item }}"
+      label: gpt
+      number: 1
+      state: present
+      align: optimal
+      part_type: primary
+      part_start: 1MB
+      part_end: "{{datadev_size}}MB"
+      unit: MB
+    with_items:
+      - "{{datadev1_hdds}}"
+
+  # Set ceph and nvme vg and lv names
+  - name: output ceph vg names
+    shell: echo vg-cephdata-`basename {{item}}`
+    with_items:
+      - "{{datadev1_hdds}}"
+    register: vg_names_out
+
+  - name: set ceph vg names
+    set_fact:
+      ceph_vg_name={{vg_names_out.results[0]['stdout']}}
+
+  - name: output ceph lv names
+    shell: echo lv-cephdata-`basename {{item}}`
+    with_items:
+      - "{{datadev1_hdds}}"
+    register: lv_names_out
+
+  - name: set ceph lv names
+    set_fact:
+      ceph_lv_name={{lv_names_out.results[0]['stdout']}}
+
+  - name: output nvme vg names
+    shell: echo vg-cephdata-`basename {{item}}`
+    with_items:
+      - "{{nvmedev1}}"
+    register: nvme_vg_names_out
+
+  - name: set nvme vg names
+    set_fact:
+      nvme_vg_name={{nvme_vg_names_out.results[0]['stdout']}}
+
+  - name: output nvme lv names
+    shell: echo lv-cephbi-`basename {{item}}`
+    with_items:
+      - "{{nvmedev1}}"
+    register: nvme_lv_names_out
+
+  - name: set nvme lv names
+    set_fact:
+      nvme_lv_name={{nvme_lv_names_out.results[0]['stdout']}}
+
+  # LVM cfg for Ceph data device
+  - name: add Ceph data device as LVM PV
+    lvg:
+      force: yes
+      pvs: "{{item}}1"
+      pesize: 4
+      state: present
+      vg: "{{ceph_vg_name}}"
+    with_items:
+      - "{{datadev1_hdds}}"
+
+  - name: create Ceph data LVs
+    lvol:
+      lv: "{{ceph_lv_name}}"
+      vg: "{{ceph_vg_name}}"
+      size: 100%FREE
+      pvs: "{{item}}1"
+    with_items:
+      - "{{datadev1_hdds}}"
+
+  # LVM cfg for Ceph data device
+  - name: add nvme data device as LVM PV
+    lvg:
+      force: yes
+      pvs: "{{item}}1"
+      pesize: 4
+      state: present
+      vg: "{{nvme_vg_name}}"
+    with_items:
+      - "{{nvmedev1}}"
+
+  - name: create Ceph data LVs
+    lvol:
+      lv: "{{nvme_lv_name}}"
+      vg: "{{nvme_vg_name}}"
+      size: 100%FREE
+      pvs: "{{item}}1"
+    with_items:
+      - "{{nvmedev1}}"
+
+# Write ending configuration logfile
+  - name: save LV configuration
+    shell: lvs
+    run_once: true
+    register: lvs_out
+
+  - name: save LSBLK output
+    shell: lsblk
+    run_once: true
+    register: lsblk_out
+
+  - name: write cmd output to logfile
+    action: template src=templates/logfile.j2 dest=/tmp/logfile.txt
+    delegate_to: localhost
+
+  - name: Print closing message
+    debug:
+      msg: "Wrote LSBLK and LVS cmd output to /tmp/logfile.txt"
+    delegate_to: localhost

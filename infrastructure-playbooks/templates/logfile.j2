@@ -1,0 +1,11 @@
+BucketIndex PARTITION SIZE:
+---------------------------
+{{ part_sizes.stdout_lines | to_yaml }}
+
+LSBLK output:
+-------------
+{{ lsblk_out.stdout_lines | to_yaml }}
+
+LVS output:
+-----------
+{{ lvs_out.stdout_lines | to_yaml }}

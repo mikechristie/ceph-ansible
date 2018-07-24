@@ -1,0 +1,12 @@
+nvmedev1: /dev/sdc
+datadev1_hdds:
+  - /dev/sdd
+# all unites are in MB
+nvmedev_size: 10000
+datadev_size: 10000
+nvme_FSjournal_size: 512
+partprefix: p
+
+numHDDs: "{{datadev1_hdds|length}}"
+numJOURNALs: "{{ (numHDDs | int) + 1 }}"
+numNVMeParts: "{{ (numJOURNALs | int) + 1 }}"
