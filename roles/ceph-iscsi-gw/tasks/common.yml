@@ -19,6 +19,7 @@
   template:
     src: "{{ role_path }}/templates/iscsi-gateway.cfg.j2"
     dest: /etc/ceph/iscsi-gateway.cfg
+    force: no
 
 - name: set_fact docker_exec_cmd
   set_fact:
