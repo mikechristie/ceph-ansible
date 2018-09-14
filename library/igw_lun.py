@@ -76,8 +76,8 @@ from logging.handlers import RotatingFileHandler
 from ansible.module_utils.basic import *
 
 from ceph_iscsi_config.lun import LUN
-from ceph_iscsi_config.utils import valid_size
 import ceph_iscsi_config.settings as settings
+from ceph_iscsi_config.common import Config
 
 # the main function is called ansible_main to allow the call stack
 # to be checked to determine whether the call to the ceph_iscsi_config
@@ -110,18 +110,25 @@ def ansible_main():
     allocating_host = module.params['host']
     desired_state = module.params['state']
 
+    config = Config(logger);
+    if not config:
+        module.fail_json(msg="(main) Could not get Ceph iSCSI config object.")
+
     ################################################
     # Validate the parameters passed from Ansible  #
     ################################################
-    if not valid_size(size):
-        logger.critical("image '{}' has an invalid size specification '{}' "
-                        "in the ansible configuration".format(image,
-                                                              size))
-        module.fail_json(msg="(main) Unable to use the size parameter '{}' "
-                             "for image '{}' from the playbook - "
-                             "must be a number suffixed by M,G "
-                             "or T".format(size,
-                                           image))
+    if desired_state == "present":
+        is_valid = LUN.valid_disk(config, logger, mode="create", pool=pool,
+                                  image=image, size=size, count="1")
+    else:
+        is_valid = LUN.valid_disk(config, logger, mode="delete", pool=pool,
+                                  image=image)
+
+    if is_valid != 'ok':
+        err_string = "Invalid rbd_devices argument. Cannot set {} to state " \
+                     "{}. Error: {}.".format(image, desired_state, is_valid)
+        logger.critical(err_string)
+        module.fail_json(msg="(main) {}".format(err_string))
 
     # define a lun object and perform some initial parameter validation
     lun = LUN(logger, pool, image, size, allocating_host)
